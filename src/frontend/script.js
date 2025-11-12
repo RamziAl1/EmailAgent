@@ -1,112 +1,152 @@
-/* ========================================
-   script.js – plain vanilla JS (no drag‑&‑drop)
-   ======================================== */
+const apiUrl = window.APP_CONFIG.API_BASE_URL;
+const user_id = Number(localStorage.getItem("user_id")) || 1;
 
-const API_URL = '/api/analyze';               // change to your real endpoint
+document.addEventListener("DOMContentLoaded", () => {
+    const chatContainer = document.getElementById("chatContainer");
+    const chatForm = document.getElementById("chatForm");
+    const chatInput = document.getElementById("chatInput");
+    const sendBtn = document.getElementById("sendBtn");
 
-// ---------- Elements ----------
-const els = {
-    textarea: document.getElementById('emailText'),
-    fileInput: document.getElementById('fileInput'),
-    chooseBtn: document.getElementById('chooseFileBtn'),
-    analyzeBtn: document.getElementById('analyzeBtn'),
-    spinner: document.getElementById('spinner'),
-    errorMsg: document.getElementById('errorMsg'),
-    resultCard: document.getElementById('resultCard'),
-    resultIcon: document.getElementById('resultIcon'),
-    resultLabel: document.getElementById('resultLabel'),
-    resultConf: document.getElementById('resultConf'),
-    explList: document.getElementById('explanationList')
-};
-
-// ---------- Helpers ----------
-const show = el => el.classList.remove('hidden');
-const hide = el => el.classList.add('hidden');
-
-const clearResult = () => {
-    hide(els.resultCard);
-    els.explList.innerHTML = '';
-};
-const setError = txt => {
-    els.errorMsg.textContent = txt;
-    show(els.errorMsg);
-};
-const clearError = () => hide(els.errorMsg);
-
-// ---------- File picker ----------
-function readFile(file) {
-    if (!file.type.includes('text') && !file.name.endsWith('.eml')) {
-        setError('Please select a text or .eml file.');
-        return;
-    }
-    const reader = new FileReader();
-    reader.onload = e => {
-        els.textarea.value = e.target.result;
-        clearError();
-    };
-    reader.onerror = () => setError('Failed to read file.');
-    reader.readAsText(file);
-}
-
-// Open file picker on button click
-els.chooseBtn.addEventListener('click', () => els.fileInput.click());
-els.fileInput.addEventListener('change', () => {
-    if (els.fileInput.files[0]) readFile(els.fileInput.files[0]);
-});
-
-// ---------- Analyze ----------
-els.analyzeBtn.addEventListener('click', async () => {
-    const email = els.textarea.value.trim();
-    if (!email) return setError('Please paste an email or load a file first.');
-
-    const mode = document.querySelector('input[name="mode"]:checked').value;
-
-    clearResult();
-    clearError();
-    show(els.spinner);
-    els.analyzeBtn.disabled = true;
-
-    // renderResult({ label: "Spam", confidence: 0.95, explanation: ["Contains suspicious links", "Sender address is blacklisted"] });
-
-    try {
-    const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, mode })
+    // --- Auto-grow text input ---
+    chatInput.addEventListener("input", () => {
+        chatInput.style.height = "auto";
+        chatInput.style.height = chatInput.scrollHeight + "px";
     });
 
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || `Server error ${res.status}`);
+    // --- Render a message bubble ---
+    function renderMessage(msg) {
+        const wrapper = document.createElement("div");
+        wrapper.className = `flex ${msg.is_bot ? "justify-start" : "justify-end"}`;
+
+        const bubble = document.createElement("div");
+        bubble.className = `
+      ${msg.is_bot ? "bg-gray-200 text-gray-800" : "bg-indigo-600 text-white"}
+      rounded-2xl px-4 py-2 max-w-[75%] shadow-md relative
+      ${msg.is_email ? "border border-indigo-200 italic" : ""}
+    `;
+
+        const timestamp = formatTimestamp(msg.timestamp);
+
+        bubble.innerHTML = `
+      <p class="whitespace-pre-wrap break-words">${msg.message}</p>
+      <span class="text-xs opacity-70 block mt-1 text-right">${timestamp}</span>
+    `;
+
+        wrapper.appendChild(bubble);
+        chatContainer.appendChild(wrapper);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
-    const data = await res.json();
-    renderResult(data);
-    } catch (err) {
-    setError(err.message);
-    } finally {
-    hide(els.spinner);
-    els.analyzeBtn.disabled = false;
+    // --- Display loading bubble (optional) ---
+    function renderLoadingBubble() {
+        const wrapper = document.createElement("div");
+        wrapper.className = "flex justify-start";
+        const bubble = document.createElement("div");
+        bubble.className =
+            "bg-gray-200 text-gray-600 rounded-2xl px-4 py-2 max-w-[75%] shadow-md animate-pulse";
+        bubble.textContent = "Thinking...";
+        wrapper.id = "loadingBubble";
+        wrapper.appendChild(bubble);
+        chatContainer.appendChild(wrapper);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
     }
+
+    // --- Remove loading bubble ---
+    function removeLoadingBubble() {
+        const loading = document.getElementById("loadingBubble");
+        if (loading) loading.remove();
+    }
+
+    // --- Handle sending messages ---
+    chatForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = chatInput.value.trim();
+        if (!text) return;
+
+        sendBtn.disabled = true;
+
+        const userMessage = {
+            user_id: user_id.toString(),
+            is_bot: false,
+            is_response: false,
+            is_email: false,
+            message: text,
+            timestamp: new Date(),
+        };
+        renderMessage(userMessage);
+        chatInput.value = "";
+        chatInput.style.height = "auto";
+
+        renderLoadingBubble();
+
+        try {
+            const res = await fetch(apiUrl + "/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(userMessage),
+            });
+            if (!res.ok) throw new Error("Server error");
+            const botMessage = await res.json();
+            removeLoadingBubble();
+            renderMessage({
+                ...botMessage,
+                is_bot: true,
+                timestamp: botMessage.timestamp || new Date(),
+            });
+        } catch (err) {
+            console.error(err);
+            removeLoadingBubble();
+            renderMessage({
+                is_bot: true,
+                is_response: true,
+                is_email: false,
+                message: "⚠️ Could not connect to the server. Please try again.",
+                timestamp: new Date(),
+            });
+        } finally {
+            sendBtn.disabled = false;
+        }
+    });
+
+    // --- Load dummy chat history for testing ---
+    async function loadChatHistory() {
+        try {
+          const res = await fetch(apiUrl + "/api/messages/byUserId/" + user_id);
+          if (!res.ok) return;
+          const messages = await res.json();
+          messages.forEach(renderMessage);
+        } catch (e) {
+          console.warn("No chat history found.");
+        }
+    }
+
+    function formatTimestamp(timestamp) {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffInHours = (now - date) / (1000 * 60 * 60);
+        
+        if (diffInHours < 24) {
+            // Today - show only time
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } else if (diffInHours < 48) {
+            // Yesterday
+            return `Yesterday at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        } else if (diffInHours < 168) {
+            // Within last week - show day name
+            return `${date.toLocaleDateString([], { weekday: 'short' })} at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        } else {
+            // Older - show full date
+            return date.toLocaleDateString([], { 
+                month: 'short', 
+                day: 'numeric',
+                year: 'numeric'
+            }) + ' at ' + date.toLocaleTimeString([], { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+        }
+    }
+
+    // Load messages on startup
+    loadChatHistory();
 });
-
-// ---------- Render result ----------
-function renderResult({ label, confidence, explanation = [] }) {
-    const icons = {
-        spam: `<svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`,
-        ham: `<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`,
-        phishing: `<svg class="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.94 4h13.88a1.88 1.88 0 001.88-1.88V7.88A1.88 1.88 0 0018.94 6H5.06A1.88 1.88 0 003.18 7.88v9.24a1.88 1.88 0 001.88 1.88z"/></svg>`
-    };
-
-    els.resultIcon.innerHTML = icons[label] || icons.phishing;
-    els.resultLabel.textContent = label;
-    els.resultConf.textContent = `${(confidence * 100).toFixed(1)}% confidence`;
-
-    if (explanation.length) {
-        els.explList.innerHTML = explanation.map(s => `<li>${s}</li>`).join('');
-    } else {
-        els.explList.innerHTML = '<li class="text-gray-500 italic">No detailed explanation returned.</li>';
-    }
-
-    show(els.resultCard);
-}
